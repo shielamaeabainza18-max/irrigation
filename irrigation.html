@@ -1,0 +1,377 @@
+
+<!DOCTYPE html>
+<html lang="tl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Irrigation Deep Well 3D</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;overflow:hidden;background:#a3d5e5;font-family:Arial,sans-serif}
+#scene{position:fixed;inset:0;width:100%;height:100%}
+header{position:fixed;top:10px;left:10px;background:#102b3aee;color:white;padding:12px;border-radius:12px;max-width:80%}
+header h2{font-size:18px;margin:0 0 5px}
+header p{font-size:12px;margin:0;color:#cce7ef}
+.panel{position:fixed;bottom:10px;left:10px;width:230px;background:#102b3aee;color:white;padding:12px;border-radius:12px}
+button{width:100%;margin:3px 0;padding:10px;border:0;border-radius:7px;background:#17647a;color:white;font-weight:bold}
+button.active{background:#13865f}
+#info{font-size:12px;line-height:1.4;margin-top:8px}
+#meters{font-size:12px;line-height:1.8}
+.camera{position:fixed;right:10px;bottom:10px;width:105px}
+.camera button{background:#102b3aee}
+@media(max-width:600px){.panel{width:205px;padding:8px}button{padding:8px;font-size:11px}header h2{font-size:15px}}
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<header>
+<h2>Deep Well Smart Irrigation</h2>
+<p>Malalim na balon • Automated irrigation • Flood prevention</p>
+</header>
+<div class="panel">
+<b>SIMULATION CONTROLS</b>
+<button id="pump">💧 Start Pump</button>
+<button id="auto">⚙ Auto Mode: OFF</button>
+<button id="drain">🌊 Open Flood Drain</button>
+<button id="rain">🌧 Simulate Rain</button>
+<button id="labels">🏷 Labels: ON</button>
+<button id="reset">↻ Reset</button>
+<div id="meters">
+Tubig sa balon: <b id="wellValue">82%</b>
+<div style="height:6px;background:#34505e;border-radius:8px"><div id="wellBar" style="height:6px;width:82%;background:#43d5ed"></div></div>
+Tubig sa palayan: <b id="fieldValue">38%</b>
+<div style="height:6px;background:#34505e;border-radius:8px"><div id="fieldBar" style="height:6px;width:38%;background:#54e0a0"></div></div>
+Drainage: <b id="drainValue">CLOSED</b>
+</div>
+<div id="info">Pindutin ang Start Pump para umakyat ang tubig mula sa balon papunta sa palayan.</div>
+</div>
+<div class="camera">
+<button id="home">Reset Camera</button>
+<button id="zoomIn">＋ Zoom</button>
+<button id="zoomOut">－ Zoom</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script>
+(()=>{
+const $=id=>document.getElementById(id);
+if(!window.THREE){$('info').textContent='Kailangan ng internet para ma-load ang 3D library.';return}
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x9bcbdc);
+scene.fog=new THREE.Fog(0x9bcbdc,35,85);
+const camera=new THREE.PerspectiveCamera(43,innerWidth/innerHeight,.1,150);
+const renderer=new THREE.WebGLRenderer({canvas:$('scene'),antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+
+scene.add(new THREE.HemisphereLight(0xe8faff,0x536b43,2));
+const sun=new THREE.DirectionalLight(0xfff1d5,2.5);
+sun.position.set(-10,18,12);
+sun.castShadow=true;
+scene.add(sun);
+
+const mat=(c,t=false,o=1)=>new THREE.MeshStandardMaterial({
+ color:c,roughness:.7,transparent:t,opacity:o
+});
+const ground=mat(0x7b9b59),soil=mat(0x75503a);
+const green=mat(0x4be2a1),blue=mat(0x42c8f0,true,.75);
+const metal=mat(0x829ba7),dark=mat(0x263e4b);
+const leaf=mat(0x67b64c),leaf2=mat(0x91ce5c);
+const orange=mat(0xffb34f);
+const root=new THREE.Group();
+scene.add(root);
+
+function box(parent,x,y,z,w,h,d,m){
+ const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);
+ o.position.set(x,y,z);o.castShadow=true;o.receiveShadow=true;
+ parent.add(o);return o;
+}
+function cyl(parent,x,y,z,rt,rb,h,m,n=24){
+ const o=new THREE.Mesh(new THREE.CylinderGeometry(rt,rb,h,n),m);
+ o.position.set(x,y,z);o.castShadow=true;o.receiveShadow=true;
+ parent.add(o);return o;
+}
+function sphere(parent,x,y,z,r,m,sx=1,sy=1,sz=1){
+ const o=new THREE.Mesh(new THREE.SphereGeometry(r,14,10),m);
+ o.position.set(x,y,z);o.scale.set(sx,sy,sz);parent.add(o);return o;
+}
+function tube(points,r,m){
+ const curve=new THREE.CatmullRomCurve3(points.map(p=>new THREE.Vector3(...p)));
+ const o=new THREE.Mesh(new THREE.TubeGeometry(curve,48,r,8,false),m);
+ o.castShadow=true;root.add(o);return curve;
+}
+const labels=[];
+function label(text,x,y,z){
+ const c=document.createElement('canvas');c.width=512;c.height=100;
+ const ctx=c.getContext('2d');
+ ctx.fillStyle='#f5fcffff';ctx.fillRect(0,0,512,100);
+ ctx.fillStyle='#163748';ctx.font='bold 29px Arial';
+ ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,256,50);
+ const tex=new THREE.CanvasTexture(c);
+ const sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,depthTest:false}));
+ sprite.position.set(x,y,z);sprite.scale.set(4.5,.9,1);
+ root.add(sprite);labels.push(sprite);
+}
+
+box(root,0,-.4,0,28,.6,19,ground);
+box(root,0,-.08,0,27.5,.1,18.5,mat(0x477e3c));
+
+// Farm boundary
+box(root,0,.02,-9,27,.15,.3,soil);
+box(root,0,.02,9,27,.15,.3,soil);
+
+// Small farm pump house
+box(root,-9,1,-6,3.5,2,3,mat(0xe5d5b1));
+const roof=new THREE.Mesh(new THREE.ConeGeometry(2.7,1.3,4),mat(0x7b8790));
+roof.position.set(-9,2.6,-6);roof.rotation.y=Math.PI/4;
+roof.scale.set(1,.8,.8);root.add(roof);
+box(root,-9,1,-4.45,.8,1.5,.08,dark);
+
+// Deep well, shown as a cutaway shaft
+const wx=-7,wz=0;
+cyl(root,wx,-.05,wz,2,2,.25,soil,32);
+cyl(root,wx,-1.05,wz,1.65,1.65,2.3,metal,32);
+cyl(root,wx,-1.1,wz,1.42,1.42,2.1,mat(0x102b3b),32);
+const wellWater=cyl(root,wx,-1.95,wz,1.38,1.38,.18,blue,32);
+cyl(root,wx,-2.25,wz,1.5,1.5,.12,soil,32);
+
+// Well top frame
+box(root,wx,.3,wz,3.7,.18,3.7,metal);
+box(root,wx,.43,wz,2.8,.1,2.8,dark);
+box(root,wx,.9,wz,2.7,.12,.12,metal);
+box(root,wx,.9,-1.25,.12,1.2,.12,metal);
+box(root,wx,.9,1.25,.12,1.2,.12,metal);
+cyl(root,wx,1.12,wz,.17,.17,2.2,metal).rotation.x=Math.PI/2;
+
+// Pump motor
+box(root,-4.2,.65,0,1.1,.75,1,dark);
+cyl(root,-4.2,.7,.55,.27,.27,.22,metal);
+sphere(root,-4.2,1.1,0,.17,green);
+
+// Suction pipe from deep well to pump
+const suction=tube([
+ [-7,-1.9,0],[-7,.6,0],[-6.2,1,0],[-5.1,.75,0],[-4.7,.65,0]
+],.11,mat(0x44c7ed));
+
+// Main irrigation pipes
+const mainPipe=tube([
+ [-3.7,.55,0],[-2.5,.5,0],[-1.3,.4,0],[.2,.35,0],
+ [1,.32,-1.4],[3,.32,-1.6]
+],.11,green);
+tube([[1,.32,-1.4],[5.4,.32,-1.4],[6.5,.32,-1.6]],.08,green);
+tube([[1,.32,-1.4],[1.4,.32,1.4],[2,.32,1.4]],.08,green);
+
+// Rice paddies
+const paddies=[
+ {x:4.5,z:-4.2,w:7.5,d:4.1},
+ {x:9.7,z:-4.2,w:2.6,d:4.1},
+ {x:6.5,z:1.2,w:9.5,d:4.4}
+];
+const fieldWater=[];
+paddies.forEach(p=>{
+ box(root,p.x,.08,p.z,p.w,.18,p.d,soil);
+ const water=box(root,p.x,.19,p.z,p.w-.2,.055,p.d-.2,blue);
+ fieldWater.push(water);
+ box(root,p.x,.25,p.z-p.d/2,p.w,.22,.12,soil);
+ box(root,p.x,.25,p.z+p.d/2,p.w,.22,.12,soil);
+ box(root,p.x-p.w/2,.25,p.z,.12,.22,p.d,soil);
+ box(root,p.x+p.w/2,.25,p.z,.12,.22,p.d,soil);
+ for(let row=0;row<4;row++){
+  for(let col=0;col<Math.floor(p.w/.48);col++){
+   const x=p.x-p.w/2+.35+col*.48;
+   const z=p.z-p.d/2+.4+row*.9;
+   for(let j=0;j<3;j++){
+    const blade=box(root,x+(j-1)*.1,.48,z,.055,.48,.06,j%2?leaf:leaf2);
+    blade.rotation.z=(j-1)*.45;
+   }
+  }
+ }
+});
+
+// Flood sensor pole
+cyl(root,10.7,1.05,2.8,.055,.055,1.8,metal,12);
+box(root,10.7,1.95,2.8,.4,.28,.25,dark);
+sphere(root,10.7,1.95,2.65,.09,green);
+
+// Drainage canal and outlet
+box(root,7.2,0,6.35,11.8,.18,1.1,soil);
+box(root,7.2,.12,6.35,11.5,.06,.8,blue);
+box(root,7.2,.2,5.78,11.8,.28,.12,soil);
+box(root,7.2,.2,6.92,11.8,.28,.12,soil);
+const drainCurve=tube([
+ [10.3,.42,2.8],[9.5,.35,4.1],[9.2,.25,5.7],[8.4,.22,6.35]
+],.13,orange);
+box(root,8.2,.35,4.9,.65,.7,.55,metal);
+box(root,8.2,.73,4.9,.34,.08,.34,orange);
+tube([[8.2,.4,4.9],[7.9,.3,5.5],[7.2,.25,6.35]],.11,orange);
+
+// Solar panel
+box(root,-2.9,1.15,-2.4,1.8,.1,1.1,metal);
+for(let i=0;i<3;i++)
+ box(root,-3.48+i*.58,1.22,-2.4,.52,.025,1,mat(0x224b77));
+box(root,-1.2,.5,-2.3,.65,.8,.5,dark);
+sphere(root,-1.2,1,-2.3,.1,green);
+
+// Labels
+label('DEEP WELL / BALON',-7,3,0);
+label('WATER PUMP',-4.2,2,0);
+label('IRRIGATION PIPE',-.2,1.4,0);
+label('RICE PADDY',6.3,2,1.2);
+label('FLOOD SENSOR',10.7,3,2.8);
+label('DRAINAGE CANAL',7.2,1.2,6.4);
+label('SOLAR CONTROLLER',-2.9,2.2,-2.4);
+
+// Animated water particles
+function particles(points,color,count){
+ const curve=new THREE.CatmullRomCurve3(points.map(p=>new THREE.Vector3(...p)));
+ return Array.from({length:count},(_,i)=>{
+  const o=sphere(root,0,0,0,.07,mat(color));
+  o.visible=false;return {o,t:i/count,curve};
+ });
+}
+const wellFlow=particles([[-7,-1.8,0],[-7,.4,0],[-6.2,1,0],[-5,.75,0],[-4.7,.65,0]],0x73eaff,18);
+const fieldFlow=particles([[-3.7,.55,0],[-2.5,.5,0],[-1.3,.4,0],[.2,.35,0],[1,.32,-1.4],[3,.32,-1.6],[5.4,.32,-1.4]],0x6dffd0,25);
+const drainFlow=particles([[10.3,.42,2.8],[9.5,.35,4.1],[9.2,.25,5.7],[8.4,.22,6.35],[7.2,.25,6.35]],0xffc46e,20);
+
+// Rain simulation
+const rainN=450,positions=new Float32Array(rainN*3),vel=[];
+for(let i=0;i<rainN;i++){
+ positions[i*3]=(Math.random()-.5)*28;
+ positions[i*3+1]=Math.random()*11+1;
+ positions[i*3+2]=(Math.random()-.5)*21;
+ vel.push(.15+Math.random()*.2);
+}
+const rainGeo=new THREE.BufferGeometry();
+rainGeo.setAttribute('position',new THREE.BufferAttribute(positions,3));
+const rain=new THREE.Points(rainGeo,new THREE.PointsMaterial({color:0xd9f6ff,size:.07}));
+scene.add(rain);rain.visible=false;
+
+// Orbit camera
+let radius=28,theta=.72,phi=1.02,drag=false,lx=0,ly=0;
+const target=new THREE.Vector3(0,0,0);
+function updateCamera(){
+ phi=Math.max(.22,Math.min(1.48,phi));
+ camera.position.set(
+ target.x+radius*Math.sin(phi)*Math.sin(theta),
+ target.y+radius*Math.cos(phi),
+ target.z+radius*Math.sin(phi)*Math.cos(theta)
+ );
+ camera.lookAt(target);
+}
+updateCamera();
+const canvas=$('scene');
+canvas.addEventListener('pointerdown',e=>{
+ drag=true;lx=e.clientX;ly=e.clientY;canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove',e=>{
+ if(!drag)return;
+ theta-=(e.clientX-lx)*.008;phi-=(e.clientY-ly)*.006;
+ lx=e.clientX;ly=e.clientY;updateCamera();
+});
+canvas.addEventListener('pointerup',()=>drag=false);
+canvas.addEventListener('pointercancel',()=>drag=false);
+canvas.addEventListener('wheel',e=>{
+ radius=Math.max(15,Math.min(43,radius+e.deltaY*.025));
+ updateCamera();e.preventDefault();
+},{passive:false});
+
+// Simulation state
+let well=82,field=38,pump=false,auto=false,drain=false,raining=false,labelsOn=true;
+function updateUI(){
+ $('pump').textContent=pump?'⏹ Stop Pump':'💧 Start Pump';
+ $('pump').classList.toggle('active',pump);
+ $('auto').textContent='⚙ Auto Mode: '+(auto?'ON':'OFF');
+ $('auto').classList.toggle('active',auto);
+ $('drain').textContent=drain?'🌊 Close Flood Drain':'🌊 Open Flood Drain';
+ $('drain').classList.toggle('active',drain);
+ $('rain').textContent=raining?'🌧 Stop Rain':'🌧 Simulate Rain';
+ $('rain').classList.toggle('active',raining);
+ $('wellValue').textContent=Math.round(well)+'%';
+ $('wellBar').style.width=well+'%';
+ $('fieldValue').textContent=Math.round(field)+'%';
+ $('fieldBar').style.width=field+'%';
+ $('drainValue').textContent=drain?'OPEN / FLOWING':'CLOSED';
+ $('info').textContent=well<8?'Mababa na ang tubig sa balon. Itigil ang pump.':
+ drain?'Bukas ang drainage. Inilalabas ang sobrang tubig sa kanal.':
+ pump?'Umaakyat ang tubig mula sa malalim na balon at dumadaloy sa mga tubo papunta sa palayan.':
+ raining?'Simulated rain is active.':
+ 'Pindutin ang Start Pump para kumuha ng tubig sa balon at patubigan ang palayan.';
+}
+$('pump').onclick=()=>{pump=!pump;if(pump&&well<5)pump=false;updateUI()};
+$('auto').onclick=()=>{auto=!auto;if(auto&&well>8&&field<60)pump=true;updateUI()};
+$('drain').onclick=()=>{drain=!drain;updateUI()};
+$('rain').onclick=()=>{raining=!raining;updateUI()};
+$('labels').onclick=()=>{
+ labelsOn=!labelsOn;labels.forEach(l=>l.visible=labelsOn);
+ $('labels').textContent='🏷 Labels: '+(labelsOn?'ON':'OFF');
+};
+$('reset').onclick=()=>{
+ well=82;field=38;pump=false;auto=false;drain=false;raining=false;updateUI();
+};
+$('home').onclick=()=>{radius=28;theta=.72;phi=1.02;target.set(0,0,0);updateCamera()};
+$('zoomIn').onclick=()=>{radius=Math.max(15,radius-3);updateCamera()};
+$('zoomOut').onclick=()=>{radius=Math.min(43,radius+3);updateCamera()};
+updateUI();
+
+let last=performance.now(),elapsed=0;
+function animate(now){
+ requestAnimationFrame(animate);
+ const dt=Math.min(.05,(now-last)/1000);last=now;elapsed+=dt;
+ for(let i=0;i<rainN;i++){
+  positions[i*3+1]-=vel[i]*(raining?1:.08)*dt*12;
+  if(positions[i*3+1]<.2){
+   positions[i*3+1]=11+Math.random()*2;
+   positions[i*3]=(Math.random()-.5)*28;
+   positions[i*3+2]=(Math.random()-.5)*21;
+  }
+ }
+ rainGeo.attributes.position.needsUpdate=true;
+ rain.visible=raining;
+ if(raining)well=Math.min(100,well+dt*.55);
+ if(pump){
+  well=Math.max(0,well-dt*1.8);
+  field=Math.min(100,field+dt*3.4);
+  if(well<=0)pump=false;
+ }
+ if(!pump&&field>38)field=Math.max(38,field-dt*.12);
+ if(drain)field=Math.max(12,field-dt*3.4);
+ if(auto){
+  if(field<50&&well>8)pump=true;
+  if(field>70){pump=false;drain=true}
+  else if(field<48)drain=false;
+  if(well<7)pump=false;
+ }
+ wellWater.position.y=-2.06+well/100*.55;
+ wellWater.scale.y=Math.max(.25,well/100);
+ fieldWater.forEach(w=>{
+  w.position.y=.17+field/100*.12;
+  w.material.opacity=.25+field/100*.4;
+ });
+ wellFlow.forEach(b=>{
+  b.o.visible=pump;
+  if(pump){b.t=(b.t+dt*.27)%1;b.o.position.copy(b.curve.getPoint(b.t))}
+ });
+ fieldFlow.forEach(b=>{
+  b.o.visible=pump;
+  if(pump){b.t=(b.t+dt*.34)%1;b.o.position.copy(b.curve.getPoint(b.t))}
+ });
+ drainFlow.forEach(b=>{
+  b.o.visible=drain;
+  if(drain){b.t=(b.t+dt*.3)%1;b.o.position.copy(b.curve.getPoint(b.t))}
+ });
+ if(Math.floor(elapsed*4)!==Math.floor((elapsed-dt)*4))updateUI();
+ renderer.render(scene,camera);
+}
+animate(performance.now());
+addEventListener('resize',()=>{
+ camera.aspect=innerWidth/innerHeight;
+ camera.updateProjectionMatrix();
+ renderer.setSize(innerWidth,innerHeight);
+});
+})();
+</script>
+</body>
+</html>
